@@ -178,7 +178,7 @@ impl Ocr {
         let image_height = full
             .PixelHeight()
             .map_err(|e| format!("读图片高度失败: {e}"))?;
-
+        
         let mut cropped: Option<SoftwareBitmap> = None;
         // 请求的那块区域（不加留白）：OCR 完按它把"顺带看到的邻居文字"过滤掉。
         let mut filter_region: Option<Region> = None;

@@ -1,15 +1,17 @@
 # lr
 
-用 **Windows 自带的 OCR**（`Windows.Media.Ocr`）读 QQ 截图里的文字。纯 Rust CLI，
+## **L**ightweight Text **R**ecognition
+
+用 **Windows 自带的 OCR**（`Windows.Media.Ocr`）识别文字。纯 Rust CLI，
 不依赖任何第三方 OCR 库，也不需要联网。
 
 ## 用法
 
 ```powershell
-# 不带路径：先截一张全屏图（默认存成 ./screenshot.png），再读"聊天名字"那块
+#截图并读取图片上所有文字。
 lr
 
-#获取群聊名称到txt中
+#截图并读取图片上所有文字到txt中，为中文。
 lr>o.txt -l zh-Hans-CN
 
 # 目录：把目录里所有图片整张识别
@@ -36,21 +38,10 @@ lr --upscale 2           # 手动指定放大倍数（1..8，调参用）
 
 ## 截图是怎么做的
 
-不带路径时 `lr` 自己截屏，**不依赖 `VisionQQ_C/ScreenCapture.dll`，也不需要外部截图工具**：
+不带路径时 `lr` 自己截屏。
 
-1. `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` —— 不然高分屏上拿到的是逻辑像素；
-2. GDI `BitBlt` 屏幕 → 内存位图 → `GetDIBits`（负高度 = 自上而下）；
-3. 像素直接包成 `SoftwareBitmap` 交给 OCR；
-4. 需要的话再用 WinRT 的 `BitmapEncoder` 存成 PNG（默认 `screenshot.png`，`--no-save` 关掉）。
 
-## 坐标怎么来的
 
-`config.ini` 的 `[general]` 里读 `width` / `height` / `scale`（读不到就用 1285×720 / 1.0）。
-和 qqpilot5 同一套口径：
-
-```text
-实际像素 = 相对坐标 × (width × scale, height × scale)
-```
 
 
 ## 两个踩过的坑（都写在代码注释里）
@@ -63,12 +54,6 @@ lr --upscale 2           # 手动指定放大倍数（1..8，调参用）
    组合在这台机器上要么返回空白图、要么报 `E_INVALIDARG`，所以改成自己按像素
    裁剪 + 双线性放大（`crop_and_scale`）。
 
-## 和 qcocr 的关系
-
-实现只参考了 `Windows.Media.Ocr` 的公开接口（解码 → `OcrEngine.RecognizeAsync` →
-`Lines` / `Words` / `BoundingRect`），**没有使用 `C:\Users\Develop\qcocr` 的任何代码**——
-那个项目没有开源许可，不能拷。这里的裁剪、留白、坐标换算、语言处理、CLI
-都是另写的。
 
 ## 测试
 

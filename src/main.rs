@@ -1,16 +1,6 @@
-//! `lr` —— 用 Windows 自带的 OCR 把 QQ 截图里的文字读出来。
+//! `lr` lightweightTextRecognition
 //!
-//! 两种用法：
-//!   * 不带路径：**先截一张全屏图**，再裁出聊天名字那一块
-//!     （`CHAT_NAME_BBOX_RELATIVE_SIZE`）做识别；截图默认存成 `screenshot.png`；
-//!   * 带目录（或单张图片）：把图片整张识别。
-//!
-//! 坐标换算要用 `config.ini` 里的 `width` / `height` / `scale`，读法见 [`config`]。
-//!
-//! 退出码：0 成功；1 参数错误；2 读配置/文件/截图失败；3 有图片识别失败。
-
 mod bitmap;
-mod config;
 mod ocr;
 
 use std::io::Write;
@@ -19,13 +9,8 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use config::Config;
 use ocr::{Bounds, Document, Ocr, Region};
 
-/// 聊天名字的绝对区域（1280x720 基准下的像素）。
-const CHAT_NAME_BBOX_POSSIBLE_SIZE: (u32, u32, u32, u32) = (237, 46, 534, 40);
-/// 上面那组绝对坐标对应的基准分辨率。
-const DEFAULT_SIZE: (u32, u32) = (1280, 720);
 
 /// 截下来的图默认存到这里（和 ScreenCapture.dll 用的是同一个名字）。
 const DEFAULT_SCREENSHOT: &str = "screenshot.png";
@@ -37,17 +22,6 @@ const IMAGE_EXTENSIONS: [&str; 9] = [
     "png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff", "webp", "ico",
 ];
 
-const fn to_relative_rect(rect: (u32, u32, u32, u32), size: (u32, u32)) -> (f64, f64, f64, f64) {
-    (
-        rect.0 as f64 / size.0 as f64,
-        rect.1 as f64 / size.1 as f64,
-        rect.2 as f64 / size.0 as f64,
-        rect.3 as f64 / size.1 as f64,
-    )
-}
-
-const CHAT_NAME_BBOX_RELATIVE_SIZE: (f64, f64, f64, f64) =
-    to_relative_rect(CHAT_NAME_BBOX_POSSIBLE_SIZE, DEFAULT_SIZE);
 
 /// 命令行参数。
 #[derive(Debug)]
@@ -99,7 +73,7 @@ fn print_usage() {
         "lr —— 用 Windows 自带的 OCR 读文字\n\
          \n\
          用法:\n\
-         \x20 lr [选项]            截屏后识别聊天名称\n\
+         \x20 lr                  识别屏幕截图\n\
          \x20 lr [选项] <目录>     识别目录里所有图片（png/jpg/bmp/gif/tif/webp）\n\
          \x20 lr [选项] <图片>     识别单张图片\n\
          \n\
@@ -107,9 +81,10 @@ fn print_usage() {
          \x20 -h, --help            显示帮助\n\
          \x20 -j, --json            输出详细 JSON（每行、每个词的坐标）\n\
          \x20 -o, --output <文件>   写到文件而不是标准输出\n\
-         \x20     --save <文件>     截图存到哪里（默认 ./screenshot.png）\n\
+         \x20     --save <文件>     截图保存位置（默认 ./screenshot.png）\n\
          \x20     --no-save         不保存截图\n\
          \x20 -s, --show-languages  列出系统可用的 OCR 语言后退出\n\
+        \x20     --bbox X,Y,W,H   手动指定裁剪区域\n\
         \x20 -l, --language <语言> 指定 OCR 语言（默认跟随系统，例如 zh-Hans-CN)
         "
 
@@ -119,7 +94,6 @@ fn print_usage() {
         println!(
         "\x20     --image <文件>    不截图，直接读这个文件（调试用）\n\
          \x20 -c, --config <文件>   配置文件（默认 ./config.ini）\n\
-         \x20     --bbox X,Y,W,H   手动指定裁剪区域（原图像素，调参用）\n\
          \x20     --upscale N      手动指定放大倍数（1~8，调参用）"
         );
     }
@@ -205,24 +179,6 @@ fn parse_region(text: &str) -> Result<Region, String> {
         width: numbers[2],
         height: numbers[3],
     })
-}
-
-/// 聊天名字那块区域的实际像素坐标。
-fn chat_name_region(config: &Config) -> Region {
-    let (width, height) = config.pixel_size();
-    let (x1, y1, x2, y2) = CHAT_NAME_BBOX_RELATIVE_SIZE;
-    let round = |value: f64| value.round() as i32;
-    let temp = Region {
-        x: round(x1 * width),
-        y: round(y1 * height),
-        width: round((x2) * width),
-        height: round((y2) * height),
-    };
-    println!(
-        "E{},{},{},{}-{}",
-        temp.x, temp.y, temp.width, temp.height, config.scale
-    );
-    temp
 }
 
 fn is_image(path: &Path) -> bool {
@@ -353,10 +309,20 @@ fn list_languages(options: &Options) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_chat_name(options: &Options, ocr: &Ocr) -> Result<(Value, String), String> {
+fn run_full_screenshot(options: &Options, ocr: &Ocr) -> Result<(Value, String), String> {
     let config_path = options.config_path();
-    let config = Config::load(config_path);
-    let region = options.bbox.unwrap_or_else(|| chat_name_region(&config));
+    let region;
+    if let Some(t)=options.bbox
+    {
+        region=t;
+    }
+    else {
+        // print_usage();
+        region=Region{
+            x:-1,y:-1,width:-1,height:-1
+        } ;
+        // region
+    }
 
     // 默认先截一张全屏图再识别；`--image` 则直接读现成的文件（调试/回归用）。
     let (document, source) = match options.image.as_deref() {
@@ -378,7 +344,7 @@ fn run_chat_name(options: &Options, ocr: &Ocr) -> Result<(Value, String), String
                 None => None,
             };
             (
-                ocr.recognize_bitmap(&screen, Some(region), options.upscale)?,
+                ocr.recognize_bitmap(&screen, if region.x!=-1 && region.y==-1 && region.width==-1 && region.height==-1 { Some(region)} else{None}, options.upscale)?,
                 json!({
                     "source": "capture",
                     "saved_to": saved_to,
@@ -393,12 +359,9 @@ fn run_chat_name(options: &Options, ocr: &Ocr) -> Result<(Value, String), String
 
     let json = json!({
         "language": ocr.language(),
-        "mode": "chat-name",
+        "mode": "screenshot",
         "config": {
             "path": config_path.display().to_string(),
-            "width": config.width,
-            "height": config.height,
-            "scale": config.scale,
         },
         "screenshot": source,
         "requested_region": bounds_json(&Bounds {
@@ -512,7 +475,7 @@ fn main() -> ExitCode {
         }
 
         let (json_value, plain) = match options.path.as_deref() {
-            None => run_chat_name(&options, &ocr).map_err(|error| (2, error))?,
+            None => run_full_screenshot(&options, &ocr).map_err(|error| (2, error))?,
             Some(path) => run_images(&ocr, path, options.upscale).map_err(|error| (2, error))?,
         };
 
@@ -540,33 +503,7 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    #[test]
-    //位置被更新过了。
-    fn chat_name_region_scales_with_the_window() {
-        // 100% 缩放：1285x720 的窗口
-        let config = Config {
-            width: 1285,
-            height: 720,
-            scale: 1.0,
-        };
-        let region = chat_name_region(&config);
-        assert_eq!(region.x, 251);
-        assert_eq!(region.y, 57);
-        assert_eq!(region.width, 500);
-        assert_eq!(region.height, 21);
-
-        // 150% 缩放：换算回 1927x1080，正好是那组绝对坐标
-        let config = Config {
-            width: 1285,
-            height: 720,
-            scale: 1.5,
-        };
-        let region = chat_name_region(&config);
-        assert_eq!(region.x, 376);
-        assert_eq!(region.y, 86);
-        assert_eq!(region.width, 750);
-        assert_eq!(region.height, 32);
-    }
+   
 
     #[test]
     fn parses_the_flags() {
